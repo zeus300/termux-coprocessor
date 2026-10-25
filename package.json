@@ -1,0 +1,30 @@
+{
+  "name": "termux-coprocessor",
+  "version": "1.0.0",
+  "description": "Transform any Android smartphone into an ARM64 offloading co-processor and dedicated PostgreSQL database server for Windows 11 via USB or Wireless ADB.",
+  "main": "cluster-manager.js",
+  "scripts": {
+    "start": "node cluster-manager.js",
+    "setup": "node setup-wizard.js",
+    "test-arm": "node termux-exec.js test-arm.js",
+    "connections": "node ver-conexiones.js",
+    "forward": "powershell -ExecutionPolicy Bypass -File ./adb-forward.ps1"
+  },
+  "keywords": [
+    "termux",
+    "android",
+    "adb",
+    "postgresql",
+    "arm64",
+    "coprocessor",
+    "distributed-computing",
+    "offloading",
+    "windows11"
+  ],
+  "author": "Marcos Bazán",
+  "license": "MIT",
+  "type": "commonjs",
+  "dependencies": {
+    "pg": "^8.13.0"
+  }
+}
