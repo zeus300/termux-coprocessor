@@ -1,9 +1,73 @@
-const { exec } = require('child_process');
+const { exec, spawn } = require('child_process');
 const net = require('net');
 const http = require('http');
 const fs = require('fs');
 const path = require('path');
 const { Client } = require('pg');
+
+const IS_DAEMON = process.argv.includes('--daemon');
+const INTERACTIVE_LOCK = path.join(__dirname, '.interactive.lock');
+const DAEMON_LOCK = path.join(__dirname, '.daemon.lock');
+
+// Si se abre en ventana normal, asegurar que exista el guardián invisible en segundo plano (windowsHide: true)
+function ensureBackgroundGuardian() {
+  if (IS_DAEMON) {
+    try { fs.writeFileSync(DAEMON_LOCK, String(process.pid), 'utf-8'); } catch (_) {}
+    return;
+  }
+
+  // Actualizar lock interactivo
+  const touchInteractive = () => {
+    try { fs.writeFileSync(INTERACTIVE_LOCK, String(Date.now()), 'utf-8'); } catch (_) {}
+  };
+  touchInteractive();
+  setInterval(touchInteractive, 2000);
+
+  const cleanInteractive = () => {
+    try { if (fs.existsSync(INTERACTIVE_LOCK)) fs.unlinkSync(INTERACTIVE_LOCK); } catch (_) {}
+  };
+  process.on('exit', cleanInteractive);
+  process.on('SIGINT', () => { cleanInteractive(); process.exit(0); });
+  process.on('SIGTERM', () => { cleanInteractive(); process.exit(0); });
+  process.on('SIGHUP', () => { cleanInteractive(); process.exit(0); });
+
+  // Verificar si el demonio invisible ya está corriendo
+  let daemonAlive = false;
+  if (fs.existsSync(DAEMON_LOCK)) {
+    try {
+      const pid = parseInt(fs.readFileSync(DAEMON_LOCK, 'utf-8').trim(), 10);
+      if (pid > 0) {
+        process.kill(pid, 0);
+        daemonAlive = true;
+      }
+    } catch (_) {
+      daemonAlive = false;
+    }
+  }
+
+  if (!daemonAlive) {
+    try {
+      const child = spawn(process.execPath, [__filename, '--daemon'], {
+        detached: true,
+        stdio: 'ignore',
+        windowsHide: true,
+        cwd: __dirname
+      });
+      child.unref();
+    } catch (_) {}
+  }
+}
+
+function isInteractiveWindowActive() {
+  if (!IS_DAEMON) return true;
+  try {
+    if (!fs.existsSync(INTERACTIVE_LOCK)) return false;
+    const lastTs = parseInt(fs.readFileSync(INTERACTIVE_LOCK, 'utf-8').trim(), 10);
+    return (Date.now() - lastTs) < 5000;
+  } catch (_) {
+    return false;
+  }
+}
 
 let currentState = 'UNKNOWN'; // 'PHONE' | 'PC' | 'SEARCHING'
 let isStartingPostgres = false;
@@ -650,6 +714,11 @@ async function checkWorkerAndDatabaseActivity() {
 }
 
 async function monitorLoop() {
+  // Si este proceso es el demonio invisible y la ventana CMD interactiva está abierta, ceder el turno para no duplicar
+  if (IS_DAEMON && isInteractiveWindowActive()) {
+    return;
+  }
+
   const phoneConnected = await checkDeviceConnected();
 
   if (phoneConnected) {
@@ -715,9 +784,12 @@ async function monitorLoop() {
   }
 }
 
-// Inicializar vista
-renderBanner();
-log('👀', 'Iniciando monitor v3.0 con transferencia continua de recursos PC <-> Móvil...', C.cyan);
+// Inicializar guardián de segundo plano y vista
+ensureBackgroundGuardian();
+if (!IS_DAEMON) {
+  renderBanner();
+  log('👀', 'Iniciando monitor v3.1 con transferencia continua PC <-> Móvil (Persistencia 24/7 activa)...', C.cyan);
+}
 
 setInterval(monitorLoop, 2500);
 monitorLoop();
