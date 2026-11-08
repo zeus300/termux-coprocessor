@@ -308,10 +308,10 @@ async function ensureAdbForwards() {
 async function ensureWorkerRunningOnPhone() {
   if (isStartingWorker) return false;
   const status = await fetchWorkerStatus(lastSeenWorkerTaskId);
-  if (status && status.version === '3.0.0') return true;
+  if (status && status.version === '3.1.0') return true;
 
   isStartingWorker = true;
-  log('⚡', 'Sincronizando e iniciando Termux Compute Worker v3.0 en pantalla del móvil...', C.yellow);
+  log('⚡', 'Sincronizando e iniciando Termux Compute Worker v3.1 en pantalla del móvil...', C.yellow);
   try {
     const workerPath = path.join(__dirname, 'worker.js');
     if (fs.existsSync(workerPath)) {
@@ -319,7 +319,7 @@ async function ensureWorkerRunningOnPhone() {
     }
     await execPromise('adb shell "am start -n com.termux/.app.TermuxActivity"');
     await new Promise((r) => setTimeout(r, 1000));
-    await execPromise('adb shell "input text \'cp /sdcard/worker.js ~/worker.js 2>/dev/null; pkill -f worker.js; nohup node ~/worker.js > ~/worker.log 2>&1 &\' && input keyevent 66"');
+    await execPromise('adb shell "input text \'cp /sdcard/worker.js ~/worker.js 2>/dev/null; pkill -f worker.js; node ~/worker.js &\' && input keyevent 66"');
     await new Promise((r) => setTimeout(r, 1800));
   } catch (_) {}
   isStartingWorker = false;

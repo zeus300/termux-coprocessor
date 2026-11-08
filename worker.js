@@ -1,13 +1,18 @@
-// Termux ARM Compute Worker v3.0 (Real-Time Terminal HUD & Compute Offloading Engine)
-// Escucha en el puerto 7777, ejecuta tareas reales delegadas desde la PC y muestra todo en vivo en la pantalla de Termux (/dev/pts/*)
+// Termux ARM Compute Worker v3.1 (Direct Terminal Screen Output & Live HUD)
+// Escucha en el puerto 7777, ejecuta tareas reales delegadas desde la PC y muestra todo en vivo en la pantalla de Termux
 const http = require('http');
-const { exec } = require('child_process');
+const { exec, execSync } = require('child_process');
 const os = require('os');
 const fs = require('fs');
 const path = require('path');
 
+// Ignorar SIGHUP para no necesitar redirección nohup y mantener stdout conectado a la pantalla de Termux
+process.on('SIGHUP', () => {});
+
 const PORT = 7777;
-const TASKS_DIR = path.join(process.env.HOME || '/data/data/com.termux/files/home', 'tasks');
+const HOME_DIR = process.env.HOME || '/data/data/com.termux/files/home';
+const TASKS_DIR = path.join(HOME_DIR, 'tasks');
+const LOG_FILE = path.join(HOME_DIR, 'worker.log');
 
 if (!fs.existsSync(TASKS_DIR)) {
   try { fs.mkdirSync(TASKS_DIR, { recursive: true }); } catch (_) {}
@@ -28,19 +33,51 @@ const C = {
   white: '\x1b[38;2;255;255;255m'
 };
 
-// Escribir directamente en la pantalla física de Termux (/dev/pts/0..3) además de stdout
+// Descubrir todos los descriptores de terminal activa en Termux (/proc/<bash_pid>/fd/1 y /dev/pts/0)
+function getActiveTerminalFds() {
+  const targets = new Set();
+  if (process.ppid) {
+    targets.add(`/proc/${process.ppid}/fd/1`);
+  }
+  try {
+    const out = execSync('pgrep -x bash', { encoding: 'utf-8', timeout: 500 });
+    for (const pid of out.split(/\s+/).filter(Boolean)) {
+      targets.add(`/proc/${pid}/fd/1`);
+    }
+  } catch (_) {}
+  return Array.from(targets);
+}
+
+let cachedTtyTargets = getActiveTerminalFds();
+setInterval(() => {
+  cachedTtyTargets = getActiveTerminalFds();
+}, 10000);
+
+// Escribir directamente en la pantalla física de Termux sin usar fs.existsSync('/dev/pts/0') (bloqueado por SELinux stat)
 function printToPhoneScreen(msg) {
   const line = msg + '\n';
   try {
-    process.stdout.write(line);
+    fs.appendFileSync(LOG_FILE, line);
   } catch (_) {}
 
-  for (let i = 0; i < 4; i++) {
-    const ptsPath = `/dev/pts/${i}`;
+  let wroteToTty = false;
+  for (const fdPath of cachedTtyTargets) {
     try {
-      if (fs.existsSync(ptsPath)) {
-        fs.appendFileSync(ptsPath, line);
-      }
+      fs.appendFileSync(fdPath, line);
+      wroteToTty = true;
+    } catch (_) {}
+  }
+
+  if (!wroteToTty) {
+    try {
+      fs.appendFileSync('/dev/pts/0', line);
+      wroteToTty = true;
+    } catch (_) {}
+  }
+
+  if (!wroteToTty) {
+    try {
+      process.stdout.write(line);
     } catch (_) {}
   }
 }
@@ -155,7 +192,7 @@ const server = http.createServer((req, res) => {
     res.writeHead(200);
     res.end(JSON.stringify({
       status: 'ONLINE',
-      version: '3.0.0',
+      version: '3.1.0',
       device: 'Moto G(9) Play (ARM64)',
       arch: process.arch,
       cpus: 8,
@@ -223,8 +260,8 @@ const server = http.createServer((req, res) => {
         // Mostrar en vivo en la pantalla del celular la recepción del paquete desde la PC
         phoneLog(
           '📥',
-          `PC ➔ ARM64 #${taskId}`,
-          `${C.cyan}${project}${C.white} • ${label} ${C.gray}(${rawBuf.length} B | CPU: ${cpuBefore}% | RAM Libre: ${memBefore.ramFreeMb} MB)${C.reset}`,
+          `PC ➔ MÓVIL #${taskId}`,
+          `${C.cyan}${project}${C.white} • ${label} ${C.gray}(${rawBuf.length}B | CPU:${cpuBefore}% | Libre:${memBefore.ramFreeMb}MB)${C.reset}`,
           C.cyan
         );
 
@@ -250,7 +287,7 @@ const server = http.createServer((req, res) => {
           totalBytesProcessed += outBytes;
 
           const firstLine = outText.split('\n').filter(Boolean)[0] || 'OK';
-          const shortPreview = firstLine.length > 68 ? firstLine.substring(0, 65) + '...' : firstLine;
+          const shortPreview = firstLine.length > 58 ? firstLine.substring(0, 55) + '...' : firstLine;
 
           const taskRecord = {
             id: taskId,
@@ -268,8 +305,8 @@ const server = http.createServer((req, res) => {
           // Mostrar en vivo en la pantalla del celular el resultado procesado y devuelto a la PC
           phoneLog(
             err ? '❌' : '📤',
-            `ARM64 ➔ PC #${taskId}`,
-            `${C.green}${durationMs}ms${C.white} • ${shortPreview} ${C.gray}(Total: ${(totalDurationMs / 1000).toFixed(1)}s cómputo ARM)${C.reset}`,
+            `MÓVIL ➔ PC #${taskId}`,
+            `${C.green}${durationMs}ms${C.white} • ${shortPreview}`,
             err ? C.red : C.green
           );
 
